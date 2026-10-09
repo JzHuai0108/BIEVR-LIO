@@ -9,7 +9,7 @@ namespace bievr {
 
 void undistortCloud(const ImuIntegratorPtr& imu_integrator, const State& x,
                     const Pointcloud& pointcloud, const TimeView& times, uint64_t stamp,
-                    const V3& G, Pointcloud& undistorted_pc) {
+                    uint64_t end_stamp, const V3& G, Pointcloud& undistorted_pc) {
   const size_t N = static_cast<size_t>(times.cols());
 
   // Build (timestamp, index) pairs
@@ -39,9 +39,9 @@ void undistortCloud(const ImuIntegratorPtr& imu_integrator, const State& x,
     run_start = run_end;
   }
 
-  // Predict transforms per timestamp, expressed at the last-point's time
-  const uint64_t t_last = timestamps.back() + stamp;
-  const Transform T_L1_G = imu_integrator->predict(t_last, x, G).inverse();
+  // Express every retained point at the original scan end, including when
+  // range filtering removed the latest-timed point.
+  const Transform T_L1_G = imu_integrator->predict(end_stamp, x, G).inverse();
   std::vector<Transform> T_L1_Li(timestamps.size());
   tbb::parallel_for(tbb::blocked_range<size_t>(0, timestamps.size()),
                     [&](const tbb::blocked_range<size_t>& r) {

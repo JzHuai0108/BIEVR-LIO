@@ -18,14 +18,6 @@ LsqRegistration::LsqRegistration(const BIEVRMap& map, const Pointcloud& source,
 Transform LsqRegistration::computeTransformation(const Transform& T_W_L_init) {
   Transform x0 = T_W_L_init;
 
-  skew_points_j_.resize(points_j_.size());
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, points_j_.size()),
-                    [&](const tbb::blocked_range<size_t>& r) {
-                      for (size_t i = r.begin(); i != r.end(); ++i) {
-                        skew_points_j_[i] = skew(points_j_[i]);
-                      }
-                    });
-
   if (config_.lm_debug_print) {
     LOG(I, "***************** optimize *****************");
   }
@@ -54,6 +46,15 @@ bool LsqRegistration::isConverged(const Transform& delta) const {
 
 double LsqRegistration::linearize(const Transform& T_W_L, Matrix66* H, Vector6* b) {
   const bool compute_jacobians = (H != nullptr && b != nullptr);
+  if (compute_jacobians && skew_points_j_.size() != points_j_.size()) {
+    skew_points_j_.resize(points_j_.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, points_j_.size()),
+                      [&](const tbb::blocked_range<size_t>& r) {
+                        for (size_t i = r.begin(); i != r.end(); ++i) {
+                          skew_points_j_[i] = skew(points_j_[i]);
+                        }
+                      });
+  }
 
   Accumulator identity_accumulator;
   identity_accumulator.huber_delta = config_.huber_delta;
@@ -123,12 +124,13 @@ double LsqRegistration::linearize(const Transform& T_W_L, Matrix66* H, Vector6* 
         return out;
       });
 
+  num_effective_points_ = total.count;
+  squared_residual_sum_ = total.squared_residual_sum;
   if (compute_jacobians) {
     *H = total.H;
     *b = total.b;
     // Remember how many points contributed correspondences in this (Jacobian)
     // linearization so the pipeline can report the effective point count.
-    num_effective_points_ = total.count;
   }
 
   return total.error_sum;

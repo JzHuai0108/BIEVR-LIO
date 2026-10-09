@@ -1,6 +1,9 @@
 #include "bievr_lio/pipeline.h"
 
+#include <array>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 
 #include "bievr_lio/inertial_factor.h"
@@ -11,6 +14,19 @@
 
 namespace bievr {
 
+namespace {
+
+// Format an integer nanosecond stamp without converting it through double.
+// The same string is used in trajectory rows and PCD filenames.
+std::string formatStamp(uint64_t stamp_ns) {
+  std::ostringstream stream;
+  stream << stamp_ns / 1000000000ULL << '.' << std::setw(9) << std::setfill('0')
+         << stamp_ns % 1000000000ULL;
+  return stream.str();
+}
+
+}  // namespace
+
 Pipeline::Pipeline(const Config& config) : config_(config) {
   map_ = std::make_shared<BIEVRMap>(config_.map);
 
@@ -19,6 +35,18 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
     tum_log_ = std::make_shared<std::ofstream>(config_.log_path, std::ios::trunc);
     if (!tum_log_->is_open()) {
       LOG(E, "Error opening output file.");
+    }
+  }
+
+  if (!config_.undistorted_frames_path.empty()) {
+    std::error_code error;
+    std::filesystem::create_directories(config_.undistorted_frames_path, error);
+    undistorted_frames_ready_ = !error;
+    if (error) {
+      LOG(E, "Could not create undistorted frame directory '"
+                 << config_.undistorted_frames_path << "': " << error.message());
+    } else {
+      LOG(I, "Saving undistorted LiDAR frames to " << config_.undistorted_frames_path);
     }
   }
 
@@ -114,8 +142,8 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   // Undistort pointcloud based on IMU integration
   timing::Timer undistortion_timer("03_undistortion");
   Pointcloud points_undistorted_I;
-  undistortCloud(imu_integrator, x_i, points_filtered_I, times, points_filtered_L.stamp, G,
-                 points_undistorted_I);
+  undistortCloud(imu_integrator, x_i, points_filtered_I, times, points_filtered_L.stamp,
+                 points_filtered_L.end_stamp, G, points_undistorted_I);
   undistortion_timer.Stop();
 
   std::vector<double> ranges;
@@ -165,7 +193,10 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   step_timer.Stop();
 
   if (!config_.log_path.empty()) {
-    logTUM(nsToS(points_L.end_stamp), T_W_I);
+    logTUM(points_L.end_stamp, T_W_I, states_.rbegin()->second.v);
+  }
+  if (undistorted_frames_ready_) {
+    saveUndistortedFrame(points_L.end_stamp, points_undistorted_I, intensities);
   }
 
   if (config_.print_timing) {
@@ -389,17 +420,66 @@ void Pipeline::publishDebugClouds(const Pointcloud& source_filtered,
   publish(IntensityPointcloud(undistorted_cloud, intensities), body_header, "points/undistorted");
 }
 
-void Pipeline::logTUM(double timestamp, const Transform& pose) {
-  const Quaternion q(pose.linear());
-  const V3& t = pose.translation();
+void Pipeline::logTUM(uint64_t stamp_ns, const Transform& T_W_I, const V3& velocity_W_I) {
   if (!tum_log_->is_open()) {
     LOG(E, "Error: Output file is not open for logging.");
     return;
   }
 
+  Transform output_pose = T_W_I;
+  V3 output_velocity = velocity_W_I;
+  if (config_.output_ref_frame == Config::OutputRefFrame::Lidar) {
+    output_pose = T_W_I * config_.T_I_L;
+    // v_W_L = v_W_I + R_W_I * (omega_I x t_I_L). The gyro is measured in the
+    // IMU frame, and its estimated bias is removed before the lever-arm term.
+    output_velocity +=
+        T_W_I.linear() * ((latest_gyro_ - gyro_bias_).cross(config_.T_I_L.translation()));
+  }
+  const Quaternion q(output_pose.linear());
+  const V3& t = output_pose.translation();
+
   (*tum_log_) << std::fixed;
-  (*tum_log_) << timestamp << " " << t.x() << " " << t.y() << " " << t.z() << " " << q.x() << " "
-              << q.y() << " " << q.z() << " " << q.w() << "\n";
+  (*tum_log_) << formatStamp(stamp_ns) << " " << t.x() << " " << t.y() << " " << t.z() << " " << q.x() << " "
+              << q.y() << " " << q.z() << " " << q.w() << " " << output_velocity.x() << " "
+              << output_velocity.y() << " " << output_velocity.z() << "\n";
+  tum_log_->flush();
+}
+
+void Pipeline::saveUndistortedFrame(uint64_t stamp, const Pointcloud& points_I,
+                                    const IntensityView& intensities) {
+  // Undistortion operates in the IMU frame. Convert the finished scan back to
+  // the LiDAR frame at its end time so each PCD can be used with LiDAR poses.
+  const Transform T_L_I = config_.T_I_L.inverse();
+  const std::filesystem::path path =
+      std::filesystem::path(config_.undistorted_frames_path) / (formatStamp(stamp) + ".pcd");
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  if (!file) {
+    LOG(E, "Could not open undistorted frame '" << path.string() << "' for writing.");
+    return;
+  }
+
+  file << "# .PCD v0.7 - Point Cloud Data file format\n"
+       << "VERSION 0.7\n"
+       << "FIELDS x y z intensity\n"
+       << "SIZE 4 4 4 4\n"
+       << "TYPE F F F F\n"
+       << "COUNT 1 1 1 1\n"
+       << "WIDTH " << points_I.size() << "\n"
+       << "HEIGHT 1\n"
+       << "VIEWPOINT 0 0 0 1 0 0 0\n"
+       << "POINTS " << points_I.size() << "\n"
+       << "DATA binary\n";
+  for (size_t i = 0; i < points_I.size(); ++i) {
+    const V3 point_L = T_L_I * points_I[i];
+    const std::array<float, 4> point = {static_cast<float>(point_L.x()),
+                                        static_cast<float>(point_L.y()),
+                                        static_cast<float>(point_L.z()),
+                                        static_cast<float>(intensities(i))};
+    file.write(reinterpret_cast<const char*>(point.data()), sizeof(point));
+  }
+  if (!file) {
+    LOG(E, "Failed to write undistorted frame '" << path.string() << "'.");
+  }
 }
 
 }  // namespace bievr

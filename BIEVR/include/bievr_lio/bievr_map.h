@@ -48,6 +48,7 @@ class BIEVRMap {
     return hashIndexVoxel(voxel_idx);
   }
   size_t size() const { return map_.size(); }
+  size_t evictedCount() const { return evicted_count_; }
   Eigen::Vector3i getVoxelIdx(const Point& point) const;
   const Voxel* getVoxel(const size_t hash_idx) const;
   bool nearestVoxel(const Point& point, size_t& result) const;
@@ -101,6 +102,7 @@ class BIEVRMap {
   };
   ankerl::unordered_dense::map<size_t, VoxelEntry> map_;
   std::list<size_t> voxels_cache_;
+  size_t evicted_count_{0};
 
   Eigen::MatrixXd corner_offsets_;
   std::vector<Point> neighbor_offsets_;

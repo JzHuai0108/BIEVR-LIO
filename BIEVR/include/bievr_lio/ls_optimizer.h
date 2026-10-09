@@ -155,6 +155,7 @@ inline bool sampleValueAndGradient(const Voxel* voxel, const double x, const dou
 struct Accumulator {
   int count = 0;
   double error_sum = 0.0;
+  double squared_residual_sum = 0.0;
   Matrix66 H = Matrix66::Zero();
   Vector6 b = Vector6::Zero();
   double huber_delta = 0.2;  // default delta
@@ -166,6 +167,7 @@ struct Accumulator {
     double w = inlier ? 1.0 : huber_delta / abs_r;
 
     error_sum += inlier ? 0.5 * r * r : huber_delta * (abs_r - 0.5 * huber_delta);
+    squared_residual_sum += r * r;
 
     if (J) {
       const Vector6 wJ = w * J->transpose();
@@ -177,6 +179,7 @@ struct Accumulator {
   inline void merge(const Accumulator& other) {
     count += other.count;
     error_sum += other.error_sum;
+    squared_residual_sum += other.squared_residual_sum;
     H += other.H;
     b += other.b;
   }
@@ -193,14 +196,16 @@ class LsqRegistration {
   Transform computeTransformation(const Transform& T_W_L_init);
 
   // Number of source points that found a valid map correspondence in the last
-  // linearization with Jacobians (i.e. the points that actually constrained the
-  // pose). Reported on the dashboard as "Effective Points".
+  // linearization. Reported on the dashboard as "Effective Points".
   int numEffectivePoints() const { return num_effective_points_; }
+  double squaredResidualSum() const { return squared_residual_sum_; }
+
+  // Right-local [rotation, translation] linearization for external batch solvers.
+  // Returns the Huber objective; H=J'WJ and b=J'Wr (no extra factor of two).
+  double linearize(const Transform& T_W_L, Matrix66* H = nullptr, Vector6* b = nullptr);
 
  private:
   bool isConverged(const Transform& delta) const;
-
-  double linearize(const Transform& T_W_L, Matrix66* H = nullptr, Vector6* b = nullptr);
 
   bool stepLm(Transform& x0, Transform& delta);
 
@@ -211,6 +216,7 @@ class LsqRegistration {
   std::vector<M3> skew_points_j_;
   bool converged_ = false;
   int num_effective_points_ = 0;
+  double squared_residual_sum_ = 0.0;
 };
 
 }  // namespace bievr

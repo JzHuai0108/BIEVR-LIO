@@ -76,11 +76,11 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
   std::vector<size_t> hash_change_indices;
   hash_change_indices.reserve(hashed_points.size());
   if (!hashed_points.empty()) {
-    size_t prev_hash = hashed_points[hashed_points.size() - 1].first;
+    size_t prev_hash = 0;
 
     for (size_t i = 0; i < hashed_points.size(); ++i) {
       size_t current_hash = hashed_points[i].first;
-      if (current_hash != prev_hash) {
+      if (i == 0 || current_hash != prev_hash) {
         hash_change_indices.push_back(i);
         if (map_.find(current_hash) == map_.end()) {
           voxels_cache_.push_front(current_hash);
@@ -150,6 +150,7 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
   }
 
   if (removal_counter > 0) {
+    evicted_count_ += static_cast<size_t>(removal_counter);
     LOG(I, "BIEVRMap exceeded max_size. Removed " << removal_counter << " old voxels.");
   }
   return true;

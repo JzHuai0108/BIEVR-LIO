@@ -285,6 +285,25 @@ configs to `config/sensor_configs/<your_name>.yaml` and adjust:
 - `lidar.min_range_m` / `lidar.max_range_m` : the usable range of your LiDAR.
 
 The algorithm parameters in `params.yaml` can usually be left at their defaults.
+
+Set `debug.trajectory_path` to save a TUM trajectory. The
+`debug.output_ref_frame` option selects `imu` (default) or `lidar` for the
+saved pose. In LiDAR mode, each pose is `T_W_L = T_W_I * T_I_L`, using the
+sensor YAML calibration. Columns 9--11 contain the world-frame velocity of
+the selected frame's origin. Choose a filename that identifies the frame,
+such as `trajectory_lidar.tum`; this option does not change published odometry.
+
+To save motion-undistorted scans as binary PCD files, set
+`debug.undistorted_frames_path` in the algorithm params YAML to an output
+directory. An empty path disables saving. Relative paths are resolved from the
+process working directory; `scripts/run_bievrlio_bag.sh` runs from its output
+directory. Each file is named `seconds.nanoseconds.pcd`, with exactly nine
+fractional digits; its stem matches the timestamp in the corresponding TUM
+trajectory row when trajectory logging is enabled. The file contains the
+range-filtered points in the LiDAR frame at scan end, with an `intensity`
+field. Scans before registration begins are not saved.
+`debug.publish_all_clouds: true` separately publishes `points/undistorted` in
+the IMU frame; it does not write PCD files.
 </details>
 
 # Acknowledgements

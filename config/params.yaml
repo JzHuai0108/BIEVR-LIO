@@ -27,5 +27,7 @@ debug:
   dashboard: True # Fancy live status print (position, biases, timing, ...)
   dashboard_ascii_path: "" # ASCII art for the dashboard. Empty = bievr_ascii.txt next to the config.
   trajectory_path: "" # Path to save trajectory. If empty, logs will not be saved.
+  output_ref_frame: imu # Frame of the saved trajectory: imu or lidar.
+  undistorted_frames_path: "" # Directory for per-frame binary PCDs in the LiDAR frame; empty disables saving.
 
 max_num_threads: 0 # 0 = automatic, >0 = number of threads to use for parallel processing

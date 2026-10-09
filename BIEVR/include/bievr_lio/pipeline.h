@@ -15,6 +15,7 @@ namespace bievr {
 class Pipeline {
  public:
   struct Config {
+    enum class OutputRefFrame { Imu, Lidar };
     Config() = default;
     PreprocessConfig preprocess;
     ImuConfig imu;
@@ -30,6 +31,9 @@ class Pipeline {
     std::string map_frame = "map";
     std::string body_frame = "body";
     std::string log_path = "";
+    OutputRefFrame output_ref_frame = OutputRefFrame::Imu;
+    // Empty disables saving. Relative paths are resolved from the process working directory.
+    std::string undistorted_frames_path = "";
 
     size_t min_points_for_map_init = 100;
     size_t map_size_running_threshold = 5;
@@ -95,7 +99,11 @@ class Pipeline {
                           const Header& header);
 
   // Logging
-  void logTUM(double timestamp, const Transform& pose);
+  // Save the selected sensor pose in TUM columns 1--8 and the velocity of
+  // that sensor origin, expressed in the world frame, in columns 9--11.
+  void logTUM(uint64_t stamp_ns, const Transform& T_W_I, const V3& velocity_W_I);
+  void saveUndistortedFrame(uint64_t stamp, const Pointcloud& points_I,
+                            const IntensityView& intensities);
 
   Config config_;
   std::map<uint64_t, State> states_;
@@ -118,6 +126,7 @@ class Pipeline {
       std::function<void(const void*, const Header&, const std::string&, const std::string&)>;
   std::unordered_map<std::type_index, PublishFunction> publishers_;
   std::shared_ptr<std::ofstream> tum_log_;
+  bool undistorted_frames_ready_ = false;
 
   // Accumulated state for the live status dashboard (printDashboard in utils).
   DashboardState dashboard_;
