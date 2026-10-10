@@ -27,6 +27,7 @@ debug:
   dashboard_ascii_path: ""
   # The runner changes into each result directory before invoking process_bag.
   trajectory_path: "trajectory_lidar.tum"
+  state_path: "scan_states.txt"
   output_ref_frame: lidar
   undistorted_frames_path: "pcd"
 

@@ -31,6 +31,8 @@ class Pipeline {
     std::string map_frame = "map";
     std::string body_frame = "body";
     std::string log_path = "";
+    // BLSS 20-column LiDAR states, including world velocity, IMU biases and gravity.
+    std::string state_path = "";
     OutputRefFrame output_ref_frame = OutputRefFrame::Imu;
     // Empty disables saving. Relative paths are resolved from the process working directory.
     std::string undistorted_frames_path = "";
@@ -126,6 +128,7 @@ class Pipeline {
       std::function<void(const void*, const Header&, const std::string&, const std::string&)>;
   std::unordered_map<std::type_index, PublishFunction> publishers_;
   std::shared_ptr<std::ofstream> tum_log_;
+  std::shared_ptr<std::ofstream> state_log_;
   bool undistorted_frames_ready_ = false;
 
   // Accumulated state for the live status dashboard (printDashboard in utils).

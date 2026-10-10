@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 #include "bievr_lio/inertial_factor.h"
 #include "bievr_lio/prior_factor.h"
@@ -36,6 +37,23 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
     if (!tum_log_->is_open()) {
       LOG(E, "Error opening output file.");
     }
+  }
+
+  if (!config_.state_path.empty()) {
+    if (config_.state_path == config_.log_path) {
+      throw std::invalid_argument("state_path and trajectory_path must differ");
+    }
+    state_log_ = std::make_shared<std::ofstream>(config_.state_path, std::ios::trunc);
+    if (!state_log_->is_open()) {
+      throw std::runtime_error("cannot open BLSS state log: " + config_.state_path);
+    }
+    const Quaternion q(config_.T_I_L.linear());
+    const V3& t = config_.T_I_L.translation();
+    (*state_log_) << std::setprecision(17)
+                  << "# liom_state pose_frame=lidar velocity_frame=lidar "
+                     "bias_frame=imu extrinsic=fixed imu_T_lidar="
+                  << t.x() << ',' << t.y() << ',' << t.z() << ','
+                  << q.x() << ',' << q.y() << ',' << q.z() << ',' << q.w() << '\n';
   }
 
   if (!config_.undistorted_frames_path.empty()) {
@@ -192,7 +210,7 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
 
   step_timer.Stop();
 
-  if (!config_.log_path.empty()) {
+  if (tum_log_ || state_log_) {
     logTUM(points_L.end_stamp, T_W_I, states_.rbegin()->second.v);
   }
   if (undistorted_frames_ready_) {
@@ -421,28 +439,40 @@ void Pipeline::publishDebugClouds(const Pointcloud& source_filtered,
 }
 
 void Pipeline::logTUM(uint64_t stamp_ns, const Transform& T_W_I, const V3& velocity_W_I) {
-  if (!tum_log_->is_open()) {
-    LOG(E, "Error: Output file is not open for logging.");
-    return;
-  }
-
-  Transform output_pose = T_W_I;
-  V3 output_velocity = velocity_W_I;
-  if (config_.output_ref_frame == Config::OutputRefFrame::Lidar) {
-    output_pose = T_W_I * config_.T_I_L;
-    // v_W_L = v_W_I + R_W_I * (omega_I x t_I_L). The gyro is measured in the
-    // IMU frame, and its estimated bias is removed before the lever-arm term.
-    output_velocity +=
-        T_W_I.linear() * ((latest_gyro_ - gyro_bias_).cross(config_.T_I_L.translation()));
-  }
+  const Transform lidar_pose = T_W_I * config_.T_I_L;
+  // The BLSS state velocity is at the LiDAR origin in world coordinates.
+  const V3 lidar_velocity = velocity_W_I + T_W_I.linear() *
+      ((latest_gyro_ - gyro_bias_).cross(config_.T_I_L.translation()));
+  const bool output_lidar = config_.output_ref_frame == Config::OutputRefFrame::Lidar;
+  const Transform& output_pose = output_lidar ? lidar_pose : T_W_I;
+  const V3& output_velocity = output_lidar ? lidar_velocity : velocity_W_I;
   const Quaternion q(output_pose.linear());
   const V3& t = output_pose.translation();
-
-  (*tum_log_) << std::fixed;
-  (*tum_log_) << formatStamp(stamp_ns) << " " << t.x() << " " << t.y() << " " << t.z() << " " << q.x() << " "
-              << q.y() << " " << q.z() << " " << q.w() << " " << output_velocity.x() << " "
-              << output_velocity.y() << " " << output_velocity.z() << "\n";
-  tum_log_->flush();
+  if (tum_log_) {
+    (*tum_log_) << std::fixed;
+    (*tum_log_) << formatStamp(stamp_ns) << " " << t.x() << " " << t.y() << " " << t.z() << " " << q.x() << " "
+                << q.y() << " " << q.z() << " " << q.w() << " " << output_velocity.x() << " "
+                << output_velocity.y() << " " << output_velocity.z() << "\n";
+    tum_log_->flush();
+  }
+  if (state_log_) {
+    const Quaternion q_lidar(lidar_pose.linear());
+    const V3& p = lidar_pose.translation();
+    const V3 gravity_world = -gravity_dir_ * kGMagnitude;
+    (*state_log_) << std::fixed << std::setprecision(9) << formatStamp(stamp_ns)
+                  << ' ' << p.x() << ' ' << p.y() << ' ' << p.z()
+                  << ' ' << q_lidar.x() << ' ' << q_lidar.y()
+                  << ' ' << q_lidar.z() << ' ' << q_lidar.w()
+                  << ' ' << lidar_velocity.x() << ' ' << lidar_velocity.y()
+                  << ' ' << lidar_velocity.z()
+                  << ' ' << gyro_bias_.x() << ' ' << gyro_bias_.y()
+                  << ' ' << gyro_bias_.z()
+                  << ' ' << acc_bias_.x() << ' ' << acc_bias_.y()
+                  << ' ' << acc_bias_.z()
+                  << ' ' << gravity_world.x() << ' ' << gravity_world.y()
+                  << ' ' << gravity_world.z() << '\n';
+    state_log_->flush();
+  }
 }
 
 void Pipeline::saveUndistortedFrame(uint64_t stamp, const Pointcloud& points_I,
